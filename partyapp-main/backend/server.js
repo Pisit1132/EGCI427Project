@@ -4,7 +4,14 @@ const bcrypt = require('bcryptjs'); // Updated to bcryptjs
 const jwt = require('jsonwebtoken');
 const cors = require('cors'); // Added CORS package
 const app = express();
+const rateLimit = require('express-rate-limit');
 
+const limiter = rateLimit({ // preventer of too many access
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100 // limit each IP to 100 requests per 15 minutes
+});
+
+app.use(limiter);
 app.use(express.json());
 app.use(cors()); // Enable CORS
 
@@ -35,19 +42,38 @@ const Survey = mongoose.model('Survey', SurveySchema);
 // JWT secret key
 const JWT_SECRET = '1234'; 
 
-// Signup route
-app.post('/signup', async (req, res) => {
-    const { email, password } = req.body;
-    const hashedPassword = await bcrypt.hash(password, 10);
-    
-    const user = new User({ email, password: hashedPassword });
-    await user.save();
-    
-    res.status(201).send('User created');
+
+const authLimiter = rateLimit({ // set up the late limmit
+    windowMs: 60 * 60 * 10, // 36 seconds window 
+    max: 5, // start blocking after 5 requests
+    message: "Too many login attempts from this IP, please try again soon"
 });
 
-// Login route
-app.post('/login', async (req, res) => {
+
+
+
+// Signup route
+app.post('/signup',authLimiter, async (req, res) => {
+    const { email, password } = req.body;
+
+    // Password validation, password should be 6 character long and contains special character
+    const passwordRegex = /^(?=.*[!@#$%^&*_-])(?=.{6,})/;
+    if (!passwordRegex.test(password)) {
+        return res.status(400).send('Password must be at least 6 characters long and contain at least one special character');
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10); // using bcrypt instead of md5 that we learn in class because it is more secure and require much more time to crack 
+    
+    const user = new User({ email, password: hashedPassword });
+    try {
+        await user.save();
+        res.status(201).send('User created');
+    } catch (error) {
+        res.status(500).send('Error creating user');
+    }
+});
+// Login route, also apply 
+app.post('/login',authLimiter, async (req, res) => {
     const { email, password } = req.body;
     const user = await User.findOne({ email });
     
@@ -57,9 +83,9 @@ app.post('/login', async (req, res) => {
     } else {
         res.status(400).send('Invalid credentials');
     }
-});
+}); 
 
-// Middleware to verify JWT
+// verify JWT
 const verifyToken = (req, res, next) => {
     const token = req.header('Authorization');
     if (!token) return res.status(401).send('Access Denied');
